@@ -5,8 +5,14 @@ from db import users_collection
 import bcrypt
 import jwt
 import os
+from datetime import datetime, timezone, timedelta
+from enum import Enum
 
 
+class UserRole(str, Enum):
+    ADMIN = "admin"
+    HOST = "vendor"
+    GUEST = "guest"
 
 # create users router
 users_router = APIRouter()
@@ -17,6 +23,7 @@ def register_user(
     username: Annotated[str, Form()],
     email: Annotated[EmailStr, Form()],
     password: Annotated[str, Form(min_length=8)],
+    role: Annotated[UserRole, Form()] = UserRole.GUEST,
     ):
 
     # Ensure user does not exist
@@ -32,7 +39,8 @@ def register_user(
     users_collection.insert_one({
         "username": username,
         "email": email,
-        "password": hashed_password.decode("utf-8")
+        "password": hashed_password.decode("utf-8"),
+        "role": role,
     })
 
    
@@ -66,10 +74,14 @@ def login_user(
         )
     
     # Generate for them an access token
-    encoded_jwt = jwt.encode({"id": str(user["_id"])}, os.getenv("JWT_SECRET_KEY"), "HS256")
+    encoded_jwt = jwt.encode({
+        "id": str(user["_id"]), 
+        "exp": datetime.now(tz=timezone.utc) + timedelta(days=365)
+        }, os.getenv("JWT_SECRET_KEY"), "HS256")
 
     return {
         "message": "User logged in successfully!",
         "access_token": encoded_jwt
         }
+
 

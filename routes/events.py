@@ -5,7 +5,10 @@ from utils import replace_mongo_id
 from typing import Annotated
 import cloudinary
 import cloudinary.uploader
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from dependencies.authn import is_authenticated
+from dependencies.authz import has_roles
+
+
 
 # Create users router
 events_router = APIRouter()
@@ -29,21 +32,35 @@ def get_events(title="", description="", limit=10, skip=0):
     return {"data": list(map(replace_mongo_id, events))}
 
 
-@events_router.post("/events", tags=["Events"])
+@events_router.post("/events", dependencies=[Depends(has_roles(["host", "admin"]))], tags=["Events"])
 def post_event(
     title: Annotated[str, Form()], 
     description: Annotated[str, File()],
     flyer: Annotated[UploadFile, File()],
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(HTTPBearer())]
+    user_id: Annotated[str, Depends(is_authenticated)]
 ):
-    print(credentials)
+    # Ensure an event with a title and user_id combined does not exist
+    event_count = events_collection.count_documents(filter={
+        "$and": [
+            {"title": title},
+            {"owner": user_id}
+        ]
+    })
+    if event_count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Event with {title} and {user_id} already exist!",
+        )
+
+
     # Upload flyer to cloundinary to get a url
     upload_result = cloudinary.uploader.upload(flyer.file)
     # # Insert event into database
     events_collection.insert_one({
         "title": title,
         "description": description,
-        "flyer_url": upload_result["secure_url"]
+        "flyer_url": upload_result["secure_url"],
+        "owner": user_id
     })
     # events_collection.insert_one(event.model_dump())
     # # Return response
@@ -80,7 +97,7 @@ def replace_event(
     return {"message": "Event replaced successfully"}
 
 @events_router.delete("/events/{event_id}", tags=["Update"])
-def delete_events(event_id):
+def delete_events(event_id, user_id: Annotated[str, Depends(is_authenticated)]):
     # Check if event_id is valid mongo id
     if not ObjectId.is_valid(event_id):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid mongo id received!")
